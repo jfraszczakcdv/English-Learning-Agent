@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<meta charset="UTF-8">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+<style>
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: sans-serif;
+    background: #f0f2f5;
+    margin: 0;
+}
+.panel {
+    background: white;
+    padding: 40px 80px;
+    border-radius: 16px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 500px;
+    max-width: 90%;
+}
+h1 { margin-bottom: 40px; color: #333; text-align: center; }
+#record-btn {
+    width: 100px; height: 100px; border-radius: 50%; border: none;
+    background: linear-gradient(135deg,#4e73ee,#2048cc); color:white;
+    font-size:36px; display:flex; justify-content:center; align-items:center;
+    cursor:pointer; box-shadow:0 8px 15px rgba(0,0,0,0.2);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+#record-btn.recording {
+    animation:pulse 1s infinite;
+    box-shadow:0 0 20px rgba(80,116,233,0.6);
+    transform: scale(1.1);
+}
+@keyframes pulse { 0%{transform:scale(1)} 50%{transform:scale(1.1)} 100%{transform:scale(1)} }
+#status { margin-top:20px; font-size:18px; color:#555; text-align:center; }
+#audio-player { margin-top:20px; }
+</style>
+</head>
+
+<body>
+<div class="panel">
+<h1>English Learning Assistant</h1>
+<button id="record-btn"><i class="fas fa-microphone"></i></button>
+<p id="status"></p>
+<audio id="audio-player" autoplay></audio>
+</div>
+
+<script>
+let mediaRecorder, audioChunks = [], recording = false;
+const recordBtn = document.getElementById("record-btn");
+const statusEl = document.getElementById("status");
+const player = document.getElementById("audio-player");
+
+// Connect WebSocket
+const ws = new WebSocket("ws://localhost:8090/ws/agent");
+ws.binaryType = "arraybuffer";
+
+ws.onopen = () => console.log("WebSocket connected");
+ws.onclose = () => console.log("WebSocket disconnected");
+
+const audioQueue = [];
+let isPlaying = false;
+
+ws.onmessage = async (event) => {
+    if (typeof event.data === "string") {
+        statusEl.innerText = event.data;
+        console.log("Message:", event.data);
+    } else {
+        console.log("Received audio chunk")
+        const audioBlob = new Blob([event.data], { type: "audio/wav" });
+        audioQueue.push(audioBlob);
+
+        if (!isPlaying) {
+            playNextAudio();
+        }
+    }
+};
+
+function playNextAudio() {
+    if (audioQueue.length === 0) {
+        isPlaying = false;
+        return;
+    }
+
+    isPlaying = true;
+    const blob = audioQueue.shift();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+
+    audio.onended = () => {
+        playNextAudio();
+    };
+
+    audio.play();
+}
+
+recordBtn.addEventListener("click", async () => {
+    if (!recording) { await startRecording(); }
+    else { await stopRecording(); }
+    recording = !recording;
+    recordBtn.classList.toggle("recording", recording);
+});
+
+async function startRecording() {
+    statusEl.innerText = "Recording...";
+    audioChunks = [];
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.start();
+}
+
+async function stopRecording() {
+    statusEl.innerText = "Waiting for a response...";
+    mediaRecorder.stop();
+    mediaRecorder.onstop = async () => {
+        const blob = new Blob(audioChunks, { type: 'audio/wav' });
+        const arrayBuffer = await blob.arrayBuffer();
+        ws.send(arrayBuffer);
+    };
+}
+</script>
+</body>
+
+</html>
